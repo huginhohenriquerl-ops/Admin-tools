@@ -29,6 +29,7 @@ local AdminState = {
     LoopBringAll = false,
     AntiLag = false,
     RemoveParticles = false,
+    Fling = false,
     Minimized = false
 }
 
@@ -429,6 +430,10 @@ local function CreateUI()
         AdminState.LoopBringAll = enabled
     end, ContentFrame)
     
+    CreateToggle("Fling (Arremessar Players)", false, function(enabled)
+        AdminState.Fling = enabled
+    end, ContentFrame)
+    
     CreateSection("VISUAL", ContentFrame)
     
     CreateToggle("ESP (Jogadores)", false, function(enabled)
@@ -709,28 +714,196 @@ local function UpdateESP()
         end
     end)
     
-    -- Gerencia criação/remoção de ESP
-    task.spawn(function()
-        while true do
-            task.wait(1) -- Verifica novos jogadores a cada 1 segundo
-            
-            if AdminState.ESP then
-                for _, player in pairs(Players:GetPlayers()) do
-                    if player ~= Player and not ESPObjects[player.Name] then
-                        CreateESP(player)
-                    end
-                end
-            else
-                for playerName in pairs(ESPObjects) do
-                    RemoveESP(playerName)
-                end
+    -- Detecta novos jogadores instantaneamente usando evento
+    Players.PlayerAdded:Connect(function(player)
+        if AdminState.ESP and player ~= Player then
+            -- Aguarda o personagem carregar
+            if player.Character then
+                CreateESP(player)
             end
+            player.CharacterAdded:Connect(function()
+                task.wait(0.5)
+                if AdminState.ESP then
+                    CreateESP(player)
+                end
+            end)
         end
     end)
+    
+    -- Adiciona ESP para jogadores já no jogo
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= Player and AdminState.ESP then
+            CreateESP(player)
+        end
+    end
     
     -- Remove ESP quando jogador sai
     Players.PlayerRemoving:Connect(function(player)
         RemoveESP(player.Name)
+    end)
+    
+    -- Monitora ativação/desativação do ESP
+    task.spawn(function()
+        local lastESPState = AdminState.ESP
+        while true do
+            task.wait(0.5)
+            
+            if AdminState.ESP ~= lastESPState then
+                if AdminState.ESP then
+                    -- ESP foi ativado - adiciona para todos
+                    for _, player in pairs(Players:GetPlayers()) do
+                        if player ~= Player then
+                            CreateESP(player)
+                        end
+                    end
+                else
+                    -- ESP foi desativado - remove de todos
+                    for playerName in pairs(ESPObjects) do
+                        RemoveESP(playerName)
+                    end
+                end
+                lastESPState = AdminState.ESP
+            end
+        end
+    end)
+end
+
+-- Sistema de Fling
+local FlingConnection
+local OriginalVelocities = {}
+
+local function SetupFling()
+    local function StartFling()
+        if not Player.Character or not Player.Character:FindFirstChild("HumanoidRootPart") then return end
+        
+        local humanoid = Player.Character:FindFirstChild("Humanoid")
+        local rootPart = Player.Character.HumanoidRootPart
+        
+        if not humanoid or not rootPart then return end
+        
+        -- Salva velocidades originais
+        OriginalVelocities = {}
+        for _, part in pairs(Player.Character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                OriginalVelocities[part] = {
+                    Velocity = part.Velocity,
+                    RotVelocity = part.RotVelocity,
+                    AssemblyLinearVelocity = part.AssemblyLinearVelocity,
+                    AssemblyAngularVelocity = part.AssemblyAngularVelocity
+                }
+            end
+        end
+        
+        -- Desabilita temporariamente a física do humanoid
+        local originalState = humanoid:GetState()
+        humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+        
+        -- Sistema de Fling otimizado
+        FlingConnection = RunService.Heartbeat:Connect(function()
+            if not AdminState.Fling or not Player.Character or not rootPart.Parent then
+                if FlingConnection then
+                    FlingConnection:Disconnect()
+                    FlingConnection = nil
+                end
+                return
+            end
+            
+            -- Aplica velocidade extrema de rotação
+            pcall(function()
+                rootPart.Velocity = Vector3.new(0, 0, 0)
+                rootPart.RotVelocity = Vector3.new(9e9, 9e9, 9e9)
+                rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, math.rad(180), 0)
+                
+                -- Mantém o jogador no lugar visualmente
+                for _, part in pairs(Player.Character:GetDescendants()) do
+                    if part:IsA("BasePart") and part ~= rootPart then
+                        part.Velocity = Vector3.new(0, 0, 0)
+                        part.RotVelocity = Vector3.new(0, 0, 0)
+                    end
+                end
+            end)
+        end)
+        
+        -- Sistema de detecção de colisão para fling
+        task.spawn(function()
+            while AdminState.Fling and Player.Character and rootPart.Parent do
+                task.wait(0.05)
+                
+                -- Detecta jogadores próximos para fling
+                for _, player in pairs(Players:GetPlayers()) do
+                    if player ~= Player and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                        local targetRoot = player.Character.HumanoidRootPart
+                        local distance = (rootPart.Position - targetRoot.Position).Magnitude
+                        
+                        -- Se estiver próximo o suficiente, aplica força
+                        if distance < 8 then
+                            pcall(function()
+                                local direction = (targetRoot.Position - rootPart.Position).Unit
+                                local force = direction * 100 + Vector3.new(0, 50, 0)
+                                
+                                -- Aplica velocidade no alvo
+                                targetRoot.Velocity = force
+                                targetRoot.AssemblyLinearVelocity = force
+                            end)
+                        end
+                    end
+                end
+            end
+        end)
+    end
+    
+    local function StopFling()
+        if FlingConnection then
+            FlingConnection:Disconnect()
+            FlingConnection = nil
+        end
+        
+        if Player.Character then
+            local humanoid = Player.Character:FindFirstChild("Humanoid")
+            
+            if humanoid then
+                humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+                task.wait(0.1)
+                humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+            end
+            
+            -- Restaura velocidades
+            for part, velocities in pairs(OriginalVelocities) do
+                if part and part.Parent then
+                    pcall(function()
+                        part.Velocity = Vector3.new(0, 0, 0)
+                        part.RotVelocity = Vector3.new(0, 0, 0)
+                        part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                    end)
+                end
+            end
+            
+            OriginalVelocities = {}
+        end
+    end
+    
+    -- Monitor de estado do Fling
+    task.spawn(function()
+        local lastFlingState = false
+        while true do
+            task.wait(0.1)
+            
+            if AdminState.Fling ~= lastFlingState then
+                if AdminState.Fling then
+                    StartFling()
+                else
+                    StopFling()
+                end
+                lastFlingState = AdminState.Fling
+            end
+        end
+    end)
+    
+    -- Para o fling ao morrer/respawnar
+    Player.CharacterAdded:Connect(function()
+        AdminState.Fling = false
+        StopFling()
     end)
 end
 
@@ -977,6 +1150,7 @@ SetupFly()
 SetupNoclip()
 SetupInfiniteJump()
 UpdateESP()
+SetupFling()
 SetupAntiLag()
 SetupClickTP()
 SetupLoopBringAll()
