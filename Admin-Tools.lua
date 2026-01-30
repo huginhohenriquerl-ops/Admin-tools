@@ -770,7 +770,7 @@ end
 
 -- Sistema de Fling
 local FlingConnection
-local OriginalVelocities = {}
+local FlingBodyVelocity
 
 local function SetupFling()
     local function StartFling()
@@ -781,45 +781,56 @@ local function SetupFling()
         
         if not humanoid or not rootPart then return end
         
-        -- Salva velocidades originais
-        OriginalVelocities = {}
-        for _, part in pairs(Player.Character:GetDescendants()) do
-            if part:IsA("BasePart") then
-                OriginalVelocities[part] = {
-                    Velocity = part.Velocity,
-                    RotVelocity = part.RotVelocity,
-                    AssemblyLinearVelocity = part.AssemblyLinearVelocity,
-                    AssemblyAngularVelocity = part.AssemblyAngularVelocity
-                }
-            end
-        end
+        -- Cria uma parte invisível para o fling
+        local FlingPart = Instance.new("Part")
+        FlingPart.Name = "FlingPart"
+        FlingPart.Size = Vector3.new(4, 4, 4)
+        FlingPart.Transparency = 1
+        FlingPart.CanCollide = false
+        FlingPart.Massless = false
+        FlingPart.Parent = Player.Character
         
-        -- Desabilita temporariamente a física do humanoid
-        local originalState = humanoid:GetState()
-        humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+        -- Weld entre a parte de fling e o rootpart
+        local Weld = Instance.new("WeldConstraint")
+        Weld.Part0 = rootPart
+        Weld.Part1 = FlingPart
+        Weld.Parent = FlingPart
         
-        -- Sistema de Fling otimizado
+        -- BodyVelocity para controlar a rotação
+        FlingBodyVelocity = Instance.new("BodyAngularVelocity")
+        FlingBodyVelocity.Name = "FlingVelocity"
+        FlingBodyVelocity.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+        FlingBodyVelocity.AngularVelocity = Vector3.new(0, 50000, 0) -- Rotação rápida mas controlável
+        FlingBodyVelocity.P = 5000
+        FlingBodyVelocity.Parent = FlingPart
+        
+        -- Mantém a movimentação normal do jogador
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing, true)
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, true)
+        
+        -- Sistema de Fling otimizado que permite movimentação
         FlingConnection = RunService.Heartbeat:Connect(function()
             if not AdminState.Fling or not Player.Character or not rootPart.Parent then
                 if FlingConnection then
                     FlingConnection:Disconnect()
                     FlingConnection = nil
                 end
+                if FlingPart then
+                    FlingPart:Destroy()
+                end
                 return
             end
             
-            -- Aplica velocidade extrema de rotação
+            -- Mantém a parte de fling girando
             pcall(function()
-                rootPart.Velocity = Vector3.new(0, 0, 0)
-                rootPart.RotVelocity = Vector3.new(9e9, 9e9, 9e9)
-                rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, math.rad(180), 0)
-                
-                -- Mantém o jogador no lugar visualmente
-                for _, part in pairs(Player.Character:GetDescendants()) do
-                    if part:IsA("BasePart") and part ~= rootPart then
-                        part.Velocity = Vector3.new(0, 0, 0)
-                        part.RotVelocity = Vector3.new(0, 0, 0)
-                    end
+                if FlingPart and FlingPart.Parent then
+                    -- Permite que o jogador se mova normalmente
+                    rootPart.Velocity = Vector3.new(
+                        rootPart.Velocity.X,
+                        rootPart.Velocity.Y,
+                        rootPart.Velocity.Z
+                    )
                 end
             end)
         end)
@@ -836,14 +847,24 @@ local function SetupFling()
                         local distance = (rootPart.Position - targetRoot.Position).Magnitude
                         
                         -- Se estiver próximo o suficiente, aplica força
-                        if distance < 8 then
+                        if distance < 10 then
                             pcall(function()
+                                -- Força mais natural e direcionada
                                 local direction = (targetRoot.Position - rootPart.Position).Unit
-                                local force = direction * 100 + Vector3.new(0, 50, 0)
+                                local horizontalForce = direction * 150
+                                local verticalForce = Vector3.new(0, 80, 0)
+                                local totalForce = horizontalForce + verticalForce
                                 
-                                -- Aplica velocidade no alvo
-                                targetRoot.Velocity = force
-                                targetRoot.AssemblyLinearVelocity = force
+                                -- Aplica velocidade no alvo de forma mais suave
+                                targetRoot.Velocity = totalForce
+                                targetRoot.AssemblyLinearVelocity = totalForce
+                                
+                                -- Adiciona um pouco de rotação para efeito visual
+                                targetRoot.RotVelocity = Vector3.new(
+                                    math.random(-20, 20),
+                                    math.random(-20, 20),
+                                    math.random(-20, 20)
+                                )
                             end)
                         end
                     end
@@ -858,28 +879,34 @@ local function SetupFling()
             FlingConnection = nil
         end
         
+        if FlingBodyVelocity then
+            FlingBodyVelocity:Destroy()
+            FlingBodyVelocity = nil
+        end
+        
         if Player.Character then
             local humanoid = Player.Character:FindFirstChild("Humanoid")
             
+            -- Remove a parte de fling
+            local flingPart = Player.Character:FindFirstChild("FlingPart")
+            if flingPart then
+                flingPart:Destroy()
+            end
+            
             if humanoid then
-                humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
-                task.wait(0.1)
-                humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+                -- Restaura estados normais
+                humanoid:SetStateEnabled(Enum.HumanoidStateType.Climbing, true)
+                humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+                humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, true)
             end
             
-            -- Restaura velocidades
-            for part, velocities in pairs(OriginalVelocities) do
-                if part and part.Parent then
-                    pcall(function()
-                        part.Velocity = Vector3.new(0, 0, 0)
-                        part.RotVelocity = Vector3.new(0, 0, 0)
-                        part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                        part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-                    end)
-                end
+            -- Limpa velocidades residuais
+            local rootPart = Player.Character:FindFirstChild("HumanoidRootPart")
+            if rootPart then
+                rootPart.Velocity = Vector3.new(0, 0, 0)
+                rootPart.RotVelocity = Vector3.new(0, 0, 0)
+                rootPart.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
             end
-            
-            OriginalVelocities = {}
         end
     end
     
