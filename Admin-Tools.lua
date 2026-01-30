@@ -1183,15 +1183,15 @@ SetupClickTP()
 SetupLoopBringAll()
 
 -- Notificação de carregamento
-local function CreateNotification(text)
+local function CreateNotification(text, duration)
     local NotifGui = Instance.new("ScreenGui")
     NotifGui.Name = "Notification"
     NotifGui.ResetOnSpawn = false
     NotifGui.Parent = Player.PlayerGui
     
     local NotifFrame = Instance.new("Frame")
-    NotifFrame.Size = UDim2.new(0, 300, 0, 60)
-    NotifFrame.Position = UDim2.new(0.5, -150, 1, 0)
+    NotifFrame.Size = UDim2.new(0, 400, 0, 80)
+    NotifFrame.Position = UDim2.new(0.5, -200, 1, 0)
     NotifFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
     NotifFrame.BorderSizePixel = 0
     NotifFrame.Parent = NotifGui
@@ -1205,30 +1205,45 @@ local function CreateNotification(text)
     NotifStroke.Thickness = 2
     NotifStroke.Parent = NotifFrame
     
+    -- Gradiente de fundo
+    local NotifGradient = Instance.new("UIGradient")
+    NotifGradient.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 40)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 20, 30))
+    }
+    NotifGradient.Rotation = 45
+    NotifGradient.Parent = NotifFrame
+    
     local NotifLabel = Instance.new("TextLabel")
     NotifLabel.Size = UDim2.new(1, -20, 1, 0)
     NotifLabel.Position = UDim2.new(0, 10, 0, 0)
     NotifLabel.BackgroundTransparency = 1
     NotifLabel.Text = text
     NotifLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    NotifLabel.TextSize = 14
+    NotifLabel.TextSize = 13
     NotifLabel.Font = Enum.Font.GothamMedium
+    NotifLabel.TextWrapped = true
+    NotifLabel.TextYAlignment = Enum.TextYAlignment.Center
     NotifLabel.Parent = NotifFrame
     
+    -- Animação de entrada
     TweenService:Create(NotifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Back), {
-        Position = UDim2.new(0.5, -150, 1, -80)
+        Position = UDim2.new(0.5, -200, 1, -100)
     }):Play()
     
-    wait(3)
+    wait(duration or 5)
     
+    -- Animação de saída
     TweenService:Create(NotifFrame, TweenInfo.new(0.5), {
-        Position = UDim2.new(0.5, -150, 1, 0)
+        Position = UDim2.new(0.5, -200, 1, 0)
     }):Play()
     
     wait(0.5)
     NotifGui:Destroy()
 end
 
-CreateNotification("⚡ Admin Tools carregado com sucesso!")
+-- Notificação personalizada com mensagem bilíngue
+CreateNotification("⚡ Obrigado por usar o Admin Tools v2.0!\n(Feito com o Claude, IA da Anthropic)\n\n✨ Thanks for using Admin Tools v2.0!\n(Made by Claude, the Anthropic's AI)", 6)
 
-print("Admin Tools v1.0 - Carregado com sucesso!")
+print("Admin Tools v2.0 - Carregado com sucesso!")
+print("Made with Claude AI by Anthropic")
