@@ -30,10 +30,13 @@ local AdminState = {
     AntiLag = false,
     RemoveParticles = false,
     Fling = false,
+    BringUnanchored = false,
+    DeleteTool = false,
     Minimized = false
 }
 
 local FlyControl = {W = 0, S = 0, A = 0, D = 0}
+local DeleteToolInstance = nil
 
 -- Função para criar UI
 local function CreateUI()
@@ -471,6 +474,16 @@ local function CreateUI()
     
     CreateToggle("Click TP (Ctrl + Click)", false, function(enabled)
         AdminState.ClickTP = enabled
+    end, ContentFrame)
+    
+    CreateSection("UTILIDADES", ContentFrame)
+    
+    CreateToggle("Bring Unanchored", false, function(enabled)
+        AdminState.BringUnanchored = enabled
+    end, ContentFrame)
+    
+    CreateToggle("Delete Tool (Click)", false, function(enabled)
+        AdminState.DeleteTool = enabled
     end, ContentFrame)
     
     CreateButton("Reset Character", function()
@@ -1075,12 +1088,198 @@ local function SetupAntiLag()
     end)
 end
 
+-- Sistema de Delete Tool
+local function SetupDeleteTool()
+    local function CreateDeleteTool()
+        -- Remove ferramenta antiga se existir
+        if DeleteToolInstance then
+            DeleteToolInstance:Destroy()
+            DeleteToolInstance = nil
+        end
+        
+        -- Cria nova ferramenta
+        local tool = Instance.new("Tool")
+        tool.Name = "🗑️ Delete Tool"
+        tool.RequiresHandle = true
+        tool.CanBeDropped = false
+        
+        -- Cria o handle (parte visual da ferramenta)
+        local handle = Instance.new("Part")
+        handle.Name = "Handle"
+        handle.Size = Vector3.new(0.5, 3, 0.5)
+        handle.Material = Enum.Material.Neon
+        handle.BrickColor = BrickColor.new("Really red")
+        handle.CanCollide = false
+        handle.Parent = tool
+        
+        -- Adiciona um mesh para deixar mais bonito
+        local mesh = Instance.new("SpecialMesh")
+        mesh.MeshType = Enum.MeshType.Sphere
+        mesh.Scale = Vector3.new(1, 1.2, 1)
+        mesh.Parent = handle
+        
+        -- Efeito visual no handle
+        local light = Instance.new("PointLight")
+        light.Color = Color3.fromRGB(255, 0, 0)
+        light.Brightness = 2
+        light.Range = 8
+        light.Parent = handle
+        
+        -- Partículas para efeito visual
+        local particles = Instance.new("ParticleEmitter")
+        particles.Texture = "rbxasset://textures/particles/smoke_main.dds"
+        particles.Color = ColorSequence.new(Color3.fromRGB(255, 0, 0))
+        particles.Size = NumberSequence.new(0.2)
+        particles.Transparency = NumberSequence.new(0.5)
+        particles.Lifetime = NumberRange.new(0.5, 1)
+        particles.Rate = 20
+        particles.Speed = NumberRange.new(1, 2)
+        particles.Parent = handle
+        
+        -- Função de deletar ao clicar
+        tool.Activated:Connect(function()
+            if not AdminState.DeleteTool then return end
+            
+            local target = Mouse.Target
+            
+            if target and target:IsA("BasePart") then
+                -- Verifica se não é parte do próprio jogador
+                if target:IsDescendantOf(Player.Character) then
+                    return
+                end
+                
+                -- Efeito visual de deleção
+                pcall(function()
+                    local clone = target:Clone()
+                    clone.Anchored = true
+                    clone.CanCollide = false
+                    clone.Parent = workspace
+                    
+                    -- Efeito de fade out
+                    local originalTransparency = clone.Transparency
+                    
+                    for i = 0, 10 do
+                        task.wait(0.03)
+                        clone.Transparency = originalTransparency + (i * 0.1)
+                        clone.Size = clone.Size * 0.95
+                    end
+                    
+                    clone:Destroy()
+                end)
+                
+                -- Deleta o objeto original
+                pcall(function()
+                    target:Destroy()
+                end)
+                
+                -- Feedback sonoro
+                local sound = Instance.new("Sound")
+                sound.SoundId = "rbxassetid://6647898073" -- Som de destruição
+                sound.Volume = 0.5
+                sound.Parent = handle
+                sound:Play()
+                
+                game:GetService("Debris"):AddItem(sound, 1)
+            end
+        end)
+        
+        -- Adiciona a ferramenta ao inventário
+        tool.Parent = Player.Backpack
+        DeleteToolInstance = tool
+        
+        return tool
+    end
+    
+    local function RemoveDeleteTool()
+        if DeleteToolInstance then
+            DeleteToolInstance:Destroy()
+            DeleteToolInstance = nil
+        end
+    end
+    
+    -- Monitor de estado da Delete Tool
+    task.spawn(function()
+        local lastDeleteToolState = false
+        while true do
+            task.wait(0.5)
+            
+            if AdminState.DeleteTool ~= lastDeleteToolState then
+                if AdminState.DeleteTool then
+                    CreateDeleteTool()
+                else
+                    RemoveDeleteTool()
+                end
+                lastDeleteToolState = AdminState.DeleteTool
+            end
+        end
+    end)
+    
+    -- Remove ao morrer e recria ao respawnar se ativo
+    Player.CharacterAdded:Connect(function(char)
+        task.wait(1)
+        if AdminState.DeleteTool then
+            CreateDeleteTool()
+        end
+    end)
+end
+
 -- Sistema de Click TP
 local function SetupClickTP()
     Mouse.Button1Down:Connect(function()
         if AdminState.ClickTP and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
             if Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") then
                 Player.Character.HumanoidRootPart.CFrame = CFrame.new(Mouse.Hit.Position)
+            end
+        end
+    end)
+end
+
+-- Sistema de Bring Unanchored
+local function SetupBringUnanchored()
+    RunService.Heartbeat:Connect(function()
+        if AdminState.BringUnanchored and Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") then
+            local myRoot = Player.Character.HumanoidRootPart
+            local myPos = myRoot.Position
+            
+            -- Busca todos os objetos não ancorados no workspace
+            for _, obj in pairs(workspace:GetDescendants()) do
+                if obj:IsA("BasePart") and not obj.Anchored and obj.Parent ~= Player.Character then
+                    -- Verifica se não é parte de outro jogador
+                    local isPlayerPart = false
+                    local parent = obj.Parent
+                    
+                    while parent do
+                        if parent:IsA("Model") and Players:GetPlayerFromCharacter(parent) then
+                            isPlayerPart = true
+                            break
+                        end
+                        parent = parent.Parent
+                    end
+                    
+                    -- Se não for parte de jogador, traz para perto
+                    if not isPlayerPart then
+                        pcall(function()
+                            -- Calcula posição em espiral ao redor do jogador
+                            local angle = math.rad(tick() * 50 + (#obj.Name * 10))
+                            local radius = 8
+                            local height = math.sin(tick() * 2) * 3
+                            
+                            local targetPos = myPos + Vector3.new(
+                                math.cos(angle) * radius,
+                                height + 3,
+                                math.sin(angle) * radius
+                            )
+                            
+                            -- Move o objeto suavemente
+                            obj.CFrame = CFrame.new(targetPos)
+                            obj.Velocity = Vector3.new(0, 0, 0)
+                            obj.RotVelocity = Vector3.new(0, 0, 0)
+                            
+                            -- Desativa colisão para evitar bugs
+                            obj.CanCollide = false
+                        end)
+                    end
+                end
             end
         end
     end)
@@ -1179,6 +1378,8 @@ SetupInfiniteJump()
 UpdateESP()
 SetupFling()
 SetupAntiLag()
+SetupBringUnanchored()
+SetupDeleteTool()
 SetupClickTP()
 SetupLoopBringAll()
 
