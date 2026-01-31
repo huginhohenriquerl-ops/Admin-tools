@@ -1234,50 +1234,229 @@ local function SetupClickTP()
     end)
 end
 
--- Sistema de Bring Unanchored
+-- Sistema de Bring Unanchored (OTIMIZADO - CÍRCULO GIRANTE)
+local BringUnchoredActive = false
+local BroughtParts = {} -- Cache de partes já trazidas
+
 local function SetupBringUnanchored()
-    RunService.Heartbeat:Connect(function()
-        if AdminState.BringUnanchored and Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") then
-            local myRoot = Player.Character.HumanoidRootPart
-            local myPos = myRoot.Position
-            
-            -- Busca todos os objetos não ancorados no workspace
-            for _, obj in pairs(workspace:GetDescendants()) do
-                if obj:IsA("BasePart") and not obj.Anchored and obj.Parent ~= Player.Character then
-                    -- Verifica se não é parte de outro jogador
-                    local isPlayerPart = false
-                    local parent = obj.Parent
-                    
-                    while parent do
-                        if parent:IsA("Model") and Players:GetPlayerFromCharacter(parent) then
-                            isPlayerPart = true
-                            break
-                        end
-                        parent = parent.Parent
+    -- Configuração de física para estabilidade
+    settings().Physics.AllowSleep = false
+    
+    local function CollectUnanchoredParts()
+        if not Player.Character or not Player.Character:FindFirstChild("HumanoidRootPart") then
+            return {}
+        end
+        
+        local myRoot = Player.Character.HumanoidRootPart
+        local myPos = myRoot.Position
+        local validParts = {}
+        
+        -- Coleta partes válidas com filtros
+        for _, obj in pairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and not obj.Anchored then
+                -- FILTRO 1: Ignora partes do próprio personagem
+                if obj:IsDescendantOf(Player.Character) then
+                    continue
+                end
+                
+                -- Verifica se já está no cache
+                if BroughtParts[obj] then
+                    continue
+                end
+                
+                -- FILTRO 2: Distância máxima de 100 studs
+                local distance = (obj.Position - myPos).Magnitude
+                if distance > 100 then
+                    continue
+                end
+                
+                -- FILTRO 3: Ignora partes muito pequenas (massa < 0.5 ou volume < 1)
+                local size = obj.Size
+                local volume = size.X * size.Y * size.Z
+                if volume < 1 or obj:GetMass() < 0.5 then
+                    continue
+                end
+                
+                -- FILTRO 4: Verifica se não é parte de outro jogador
+                local isPlayerPart = false
+                local parent = obj.Parent
+                
+                while parent do
+                    if parent:IsA("Model") and Players:GetPlayerFromCharacter(parent) then
+                        isPlayerPart = true
+                        break
                     end
+                    parent = parent.Parent
+                end
+                
+                if not isPlayerPart then
+                    table.insert(validParts, obj)
+                end
+            end
+        end
+        
+        return validParts
+    end
+    
+    local function BringPartsGradually(parts)
+        if not Player.Character or not Player.Character:FindFirstChild("HumanoidRootPart") then
+            return
+        end
+        
+        -- DISTRIBUIÇÃO DE CARGA: Processa 8 partes por frame
+        local batchSize = 8
+        local currentIndex = 1
+        
+        task.spawn(function()
+            while currentIndex <= #parts do
+                if not AdminState.BringUnanchored or not Player.Character or not Player.Character:FindFirstChild("HumanoidRootPart") then
+                    break
+                end
+                
+                -- Processa um lote de partes
+                for i = currentIndex, math.min(currentIndex + batchSize - 1, #parts) do
+                    local obj = parts[i]
                     
-                    -- Se não for parte de jogador, traz para perto
-                    if not isPlayerPart then
+                    if obj and obj.Parent and not obj.Anchored then
                         pcall(function()
-                            -- Calcula posição em espiral ao redor do jogador
-                            local angle = math.rad(tick() * 50 + (#obj.Name * 10))
-                            local radius = 8
-                            local height = math.sin(tick() * 2) * 3
-                            
-                            local targetPos = myPos + Vector3.new(
-                                math.cos(angle) * radius,
-                                height + 3,
-                                math.sin(angle) * radius
-                            )
-                            
-                            -- Move o objeto suavemente
-                            obj.CFrame = CFrame.new(targetPos)
+                            -- ESTABILIDADE: Zera velocidades antes de mover
                             obj.Velocity = Vector3.new(0, 0, 0)
                             obj.RotVelocity = Vector3.new(0, 0, 0)
+                            obj.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                            obj.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
                             
-                            -- Desativa colisão para evitar bugs
+                            -- Desativa colisão para evitar conflitos
                             obj.CanCollide = false
+                            
+                            -- Adiciona ao cache com índice
+                            BroughtParts[obj] = i
                         end)
+                    end
+                end
+                
+                currentIndex = currentIndex + batchSize
+                
+                -- Pequena pausa para distribuir a carga
+                task.wait(0.015)
+            end
+        end)
+    end
+    
+    -- Loop principal de coleta (a cada 3 segundos)
+    task.spawn(function()
+        while true do
+            task.wait(3)
+            
+            if AdminState.BringUnanchored then
+                if not BringUnchoredActive then
+                    BringUnchoredActive = true
+                    
+                    -- Coleta novas partes válidas
+                    local parts = CollectUnanchoredParts()
+                    
+                    if #parts > 0 then
+                        BringPartsGradually(parts)
+                    end
+                    
+                    BringUnchoredActive = false
+                end
+            else
+                -- Limpa cache quando desativado
+                BroughtParts = {}
+            end
+        end
+    end)
+    
+    -- Loop de rotação otimizado (atualiza posições em círculo)
+    task.spawn(function()
+        while true do
+            task.wait(0.05) -- 20 FPS para movimento suave
+            
+            if AdminState.BringUnanchored and Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") then
+                local myRoot = Player.Character.HumanoidRootPart
+                local myPos = myRoot.Position
+                
+                -- Conta quantas partes válidas existem
+                local validCount = 0
+                local partsToUpdate = {}
+                
+                for obj, index in pairs(BroughtParts) do
+                    if obj and obj.Parent and not obj.Anchored then
+                        validCount = validCount + 1
+                        table.insert(partsToUpdate, {obj = obj, index = index})
+                    else
+                        -- Remove do cache se foi destruída ou ancorada
+                        BroughtParts[obj] = nil
+                    end
+                end
+                
+                -- Atualiza posições em círculo girante
+                if validCount > 0 then
+                    local angleOffset = tick() * 30 -- Velocidade de rotação (30 graus/segundo)
+                    local radius = 8 -- Raio do círculo
+                    
+                    -- Processa em lotes para não sobrecarregar
+                    local batchSize = 10
+                    for i = 1, #partsToUpdate, batchSize do
+                        for j = i, math.min(i + batchSize - 1, #partsToUpdate) do
+                            local data = partsToUpdate[j]
+                            local obj = data.obj
+                            local index = data.index
+                            
+                            pcall(function()
+                                -- Calcula ângulo único para cada objeto
+                                local angle = math.rad((index * 360 / validCount) + angleOffset)
+                                
+                                -- Calcula altura com variação suave
+                                local height = 2 + math.sin(index * 0.8 + tick() * 0.5) * 1
+                                
+                                -- Posição no círculo
+                                local targetPos = myPos + Vector3.new(
+                                    math.cos(angle) * radius,
+                                    height,
+                                    math.sin(angle) * radius
+                                )
+                                
+                                -- Move suavemente (interpolação)
+                                local currentPos = obj.Position
+                                local lerpPos = currentPos:Lerp(targetPos, 0.2) -- 20% por frame = movimento suave
+                                
+                                obj.CFrame = CFrame.new(lerpPos)
+                                
+                                -- Mantém velocidade zerada
+                                obj.Velocity = Vector3.new(0, 0, 0)
+                                obj.RotVelocity = Vector3.new(0, 0, 0)
+                            end)
+                        end
+                        
+                        -- Micro-pausa entre lotes
+                        if i + batchSize < #partsToUpdate then
+                            task.wait(0.001)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    
+    -- Loop de limpeza (remove objetos que saíram do alcance)
+    task.spawn(function()
+        while true do
+            task.wait(5)
+            
+            if AdminState.BringUnanchored and Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") then
+                local myRoot = Player.Character.HumanoidRootPart
+                local myPos = myRoot.Position
+                
+                -- Remove objetos muito distantes do cache
+                for obj, _ in pairs(BroughtParts) do
+                    if obj and obj.Parent then
+                        local distance = (obj.Position - myPos).Magnitude
+                        if distance > 150 then
+                            BroughtParts[obj] = nil
+                        end
+                    else
+                        BroughtParts[obj] = nil
                     end
                 end
             end
@@ -1308,6 +1487,98 @@ local function SetupLoopBringAll()
                     end)
                 end
             end
+        end
+    end)
+end
+
+-- Sistema para manter SEMPRE WalkSpeed, JumpPower e Gravity
+local function SetupPersistentStats()
+    -- Loop constante para forçar os valores
+    RunService.Heartbeat:Connect(function()
+        if Player.Character then
+            local humanoid = Player.Character:FindFirstChild("Humanoid")
+            
+            if humanoid then
+                -- Força WalkSpeed
+                if humanoid.WalkSpeed ~= AdminState.WalkSpeed then
+                    humanoid.WalkSpeed = AdminState.WalkSpeed
+                end
+                
+                -- Força JumpPower (ambos os sistemas)
+                if humanoid.JumpPower ~= AdminState.JumpPower then
+                    humanoid.JumpPower = AdminState.JumpPower
+                    humanoid.UseJumpPower = true
+                end
+                
+                pcall(function()
+                    humanoid.JumpHeight = AdminState.JumpPower / 4
+                end)
+            end
+        end
+        
+        -- Força Gravity
+        if workspace.Gravity ~= AdminState.Gravity then
+            workspace.Gravity = AdminState.Gravity
+        end
+    end)
+    
+    -- Proteção adicional contra resets de propriedades
+    if Player.Character then
+        local humanoid = Player.Character:FindFirstChild("Humanoid")
+        if humanoid then
+            -- Detecta mudanças e reverte
+            humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+                if humanoid.WalkSpeed ~= AdminState.WalkSpeed then
+                    humanoid.WalkSpeed = AdminState.WalkSpeed
+                end
+            end)
+            
+            humanoid:GetPropertyChangedSignal("JumpPower"):Connect(function()
+                if humanoid.JumpPower ~= AdminState.JumpPower then
+                    humanoid.JumpPower = AdminState.JumpPower
+                    humanoid.UseJumpPower = true
+                end
+            end)
+        end
+    end
+    
+    -- Reaplica ao respawnar
+    Player.CharacterAdded:Connect(function(char)
+        task.wait(0.1)
+        
+        local humanoid = char:WaitForChild("Humanoid")
+        
+        -- Aplica valores imediatamente
+        humanoid.WalkSpeed = AdminState.WalkSpeed
+        humanoid.JumpPower = AdminState.JumpPower
+        humanoid.UseJumpPower = true
+        
+        pcall(function()
+            humanoid.JumpHeight = AdminState.JumpPower / 4
+        end)
+        
+        workspace.Gravity = AdminState.Gravity
+        
+        -- Adiciona listeners para o novo personagem
+        humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+            if humanoid.WalkSpeed ~= AdminState.WalkSpeed then
+                humanoid.WalkSpeed = AdminState.WalkSpeed
+            end
+        end)
+        
+        humanoid:GetPropertyChangedSignal("JumpPower"):Connect(function()
+            if humanoid.JumpPower ~= AdminState.JumpPower then
+                humanoid.JumpPower = AdminState.JumpPower
+                humanoid.UseJumpPower = true
+            end
+        end)
+        
+        if AdminState.Fullbright then
+            Lighting.Brightness = 2
+            Lighting.ClockTime = 14
+            Lighting.FogEnd = 100000
+            Lighting.GlobalShadows = false
+            Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
         end
     end)
 end
@@ -1345,33 +1616,9 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
--- Manter valores ao respawnar
-Player.CharacterAdded:Connect(function(char)
-    wait(0.1)
-    
-    local humanoid = char:WaitForChild("Humanoid")
-    humanoid.WalkSpeed = AdminState.WalkSpeed
-    
-    -- Aplica JumpPower de forma compatível
-    humanoid.JumpPower = AdminState.JumpPower
-    humanoid.UseJumpPower = true
-    pcall(function()
-        humanoid.JumpHeight = AdminState.JumpPower / 4
-    end)
-    
-    workspace.Gravity = AdminState.Gravity
-    
-    if AdminState.Fullbright then
-        Lighting.Brightness = 2
-        Lighting.ClockTime = 14
-        Lighting.FogEnd = 100000
-        Lighting.GlobalShadows = false
-        Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
-    end
-end)
-
 -- Inicializar sistemas
 CreateUI()
+SetupPersistentStats() -- NOVO: Mantém stats sempre ativos
 SetupFly()
 SetupNoclip()
 SetupInfiniteJump()
